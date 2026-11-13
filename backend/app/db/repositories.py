@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import EvidenceItem, Incident
+from app.db.models import EvidenceChunk, EvidenceInventory, EvidenceItem, Incident
 from app.schemas.evidence import EvidenceCreate
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 
@@ -143,3 +143,34 @@ def list_evidence_for_incident(
         .offset(offset)
     )
     return list(db.execute(statement).scalars().all())
+
+
+def get_inventory(
+    db: Session,
+    incident_id: UUID,
+) -> Optional[EvidenceInventory]:
+    statement = select(EvidenceInventory).where(
+        EvidenceInventory.incident_id == incident_id
+    )
+    return db.execute(statement).scalar_one_or_none()
+
+
+def list_chunks_for_incident(
+    db: Session,
+    incident_id: UUID,
+    representation_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[EvidenceChunk]:
+    statement = select(EvidenceChunk).where(EvidenceChunk.incident_id == incident_id)
+    if representation_type:
+        statement = statement.where(
+            EvidenceChunk.representation_type == representation_type
+        )
+    statement = (
+        statement.order_by(EvidenceChunk.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(db.execute(statement).scalars().all())
+

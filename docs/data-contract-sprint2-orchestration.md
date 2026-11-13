@@ -145,7 +145,114 @@ Source evidence references are stored directly on each chunk via `source_evidenc
 
 ---
 
-## 4. RAG Retrieval Service
+## 4. Evidence Preprocessing Contract
+
+To prepare raw evidence items for vector search and avoid token bloat, evidence is processed through type-specific preprocessors before chunk creation.
+
+### 4.1 Preprocessor Scope
+
+* **Preprocessed Types (4 categories)**:
+  * `application_log` $\rightarrow$ `preprocess_logs` (log pattern clustering / Drain3)
+  * `metric` $\rightarrow$ `preprocess_metrics` (anomaly & changepoint detection)
+  * `ticket` (Jira) $\rightarrow$ `preprocess_jira` (ticket summarization)
+  * `slack_message` $\rightarrow$ `preprocess_slack` (thread summarization)
+* **Non-Preprocessed Types**:
+  * Other evidence types (e.g. `deployment_log`, `generic`) pass through directly into `evidence_chunks` without loss, tagged with their respective representation type (e.g., `deployment_event` or `unprocessed_evidence`).
+
+---
+
+### 4.2 Preprocessor Function Signature
+
+All preprocessor modules in `app/services/preprocessors/` adhere to a uniform batch signature:
+
+```python
+def preprocess_evidence(evidence: list[dict]) -> list[dict]:
+    ...
+```
+
+#### Input Dictionary Schema (per item)
+
+```json
+{
+  "evidence_id": "c1f8a847-a8d2-4b2a-89bc-9937bc38d9b1",
+  "incident_id": "8f2a1b9c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+  "evidence_type": "application_log",
+  "content": "Database connection timeout for api-service",
+  "timestamp": "2026-11-08T10:12:00Z",
+  "service_name": "api-service",
+  "metadata": {}
+}
+```
+
+* `evidence_id` (`str`): UUID of the source record in `evidence_items`.
+* `incident_id` (`str`): UUID of the parent incident.
+* `evidence_type` (`str`): Telemetry classification (`application_log`, `metric`, `ticket`, `slack_message`).
+* `content` (`str`): Normalized text or description extracted from `excerpt` or `payload`.
+* `timestamp` (`str | None`): Event timestamp in ISO-8601 UTC string format.
+* `service_name` (`str | None`): Affected service or origin name.
+* `metadata` (`dict`): Source-specific payload dictionary.
+
+#### Output Dictionary Schema (per preprocessed record)
+
+```json
+{
+  "incident_id": "8f2a1b9c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+  "evidence_type": "application_log",
+  "representation_type": "log_cluster",
+  "content": "Multiple database connection timeouts occurred in api-service.",
+  "source_ids": ["c1f8a847-a8d2-4b2a-89bc-9937bc38d9b1", "..."],
+  "timestamp": null,
+  "time_range": {
+    "start": "2026-11-08T10:12:00Z",
+    "end": "2026-11-08T10:18:00Z"
+  },
+  "service_name": "api-service",
+  "metadata": {
+    "cluster_count": 3
+  }
+}
+```
+
+* `incident_id` (`str`): Incident ID.
+* `evidence_type` (`str`): Source evidence type.
+* `representation_type` (`str`): Target representation (`log_cluster`, `metric_anomaly`, `jira_summary`, `slack_summary`).
+* `content` (`str`): Preprocessed summary text ready for RAG embedding and LLM reasoning.
+* `source_ids` (`list[str]`): List of original `evidence_id`s represented by this record (preserves complete provenance).
+* `timestamp` (`str | None`): Single point-in-time timestamp (if applicable).
+* `time_range` (`dict | None`): Range object with `start` and `end` ISO timestamps (if spanning an interval).
+* `service_name` (`str | None`): Related service.
+* `metadata` (`dict`): Preprocessing statistics (e.g. `cluster_size`, `peak_value`, `thread_count`).
+
+---
+
+## 5. Pipeline Architecture & Implementation Status
+
+The Sprint 2 evidence preparation layer is structured into modular components:
+
+```text
+backend/app/
+├── db/
+│   ├── models.py                   # Implemented: EvidenceInventory & EvidenceChunk models
+│   └── repositories.py             # Implemented: get_inventory & list_chunks_for_incident
+└── services/
+    ├── preprocessors/              # Implemented: Placeholder functions ready for algorithms
+    │   ├── logs.py                 # preprocess_logs (Drain3 clustering)
+    │   ├── metrics.py              # preprocess_metrics (Anomaly detection)
+    │   ├── jira.py                 # preprocess_jira (Ticket summarization)
+    │   └── slack.py                # preprocess_slack (Thread summarization)
+    └── evidence_prep_service.py    # Implemented: Coordinator pipeline
+```
+
+### Pipeline Execution Flow (`prepare_evidence_for_incident`):
+1. **Load Raw Evidence**: Retrieves raw items for the given incident from `evidence_items`.
+2. **Convert & Route**: Transforms rows to input schemas, routing 4 types to preprocessors and non-preprocessed types to pass-through chunks.
+3. **Embeddings**: Generates 1536-dimensional float vector embeddings for all generated chunks.
+4. **Persist Chunks**: Bulk-writes chunks into `evidence_chunks` with `source_evidence_ids` for zero-join retrieval.
+5. **Upsert Inventory**: Computes summary counts, distinct services, and time ranges, then upserts the `evidence_inventory` record.
+
+---
+
+## 6. RAG Retrieval Service
 
 Team 1 will deliver a **RAG retrieval service** that performs semantic search over `evidence_chunks` using pgvector. It accepts a natural language query with optional filters (representation types, services, time range) and returns a ranked list of the most relevant chunks with their content, metadata, similarity score, and original evidence references (`source_evidence_ids` for traceability back to `evidence_items`).
 
@@ -155,7 +262,7 @@ The exact interface will be agreed between Team 1 and Team 2 before implementati
 
 ---
 
-## 5. Team 1 Deliverables
+## 7. Team 1 Deliverables
 
 The following is what Team 1 must deliver for Team 2 to start and complete their work.
 
@@ -177,7 +284,7 @@ If the full pipeline is not ready, Team 1 can provide **stub implementations** o
 
 ---
 
-## 6. Identifier Reference
+## 8. Identifier Reference
 
 Aligns with Sprint 1 conventions (`docs/data-contract.md` Section 6).
 
