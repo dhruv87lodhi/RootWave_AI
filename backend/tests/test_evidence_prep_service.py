@@ -4,9 +4,9 @@ import uuid
 import pytest
 
 from app.db.models import EvidenceItem
+from app.services.embedding_service import generate_embedding
 from app.services.evidence_prep_service import (
     _create_passthrough_chunk,
-    _generate_mock_embedding,
     _item_to_preprocessor_input,
     prepare_evidence_for_incident,
 )
@@ -57,9 +57,9 @@ def test_create_passthrough_chunk():
 
 
 def test_generate_mock_embedding():
-    emb1 = _generate_mock_embedding("database timeout")
-    emb2 = _generate_mock_embedding("database timeout")
-    emb3 = _generate_mock_embedding("completely different text")
+    emb1 = generate_embedding("database timeout")
+    emb2 = generate_embedding("database timeout")
+    emb3 = generate_embedding("completely different text")
 
     assert len(emb1) == 1536
     assert emb1 == emb2  # Deterministic

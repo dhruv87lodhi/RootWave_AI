@@ -15,23 +15,13 @@ from sqlalchemy.orm import Session
 
 from app.db import repositories
 from app.db.models import EvidenceChunk, EvidenceInventory, EvidenceItem
+from app.services.embedding_service import generate_embedding
 from app.services.preprocessors import (
     preprocess_jira,
     preprocess_logs,
     preprocess_metrics,
     preprocess_slack,
 )
-
-
-def _generate_mock_embedding(text: str, dim: int = 1536) -> List[float]:
-    """Generates a deterministic float vector based on text content hash."""
-    seed_hash = hashlib.sha256(text.encode("utf-8")).digest()
-    values = []
-    for i in range(dim):
-        byte_val = seed_hash[i % len(seed_hash)]
-        # Map byte 0-255 to roughly [-1.0, 1.0]
-        values.append(round((byte_val / 127.5) - 1.0, 4))
-    return values
 
 
 def _parse_iso_datetime(val: Optional[str]) -> Optional[datetime]:
@@ -162,7 +152,7 @@ def prepare_evidence_for_incident(
 
     for rec in processed_records:
         content = rec.get("content", "")
-        embedding = _generate_mock_embedding(content) if generate_embeddings else None
+        embedding = generate_embedding(content) if generate_embeddings else None
 
         # Parse timestamps
         tr = rec.get("time_range")

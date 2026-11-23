@@ -235,43 +235,66 @@ backend/app/
 │   ├── models.py                   # Implemented: EvidenceInventory & EvidenceChunk models
 │   └── repositories.py             # Implemented: get_inventory & list_chunks_for_incident
 └── services/
+    ├── embedding_service.py        # Implemented: 1536-dim embeddings & cosine similarity (OpenAI/Gemini with deterministic fallback)
     ├── preprocessors/              # Implemented: Placeholder functions ready for algorithms
     │   ├── logs.py                 # preprocess_logs (Drain3 clustering)
     │   ├── metrics.py              # preprocess_metrics (Anomaly detection)
     │   ├── jira.py                 # preprocess_jira (Ticket summarization)
     │   └── slack.py                # preprocess_slack (Thread summarization)
-    └── evidence_prep_service.py    # Implemented: Coordinator pipeline
+    ├── evidence_prep_service.py    # Implemented: Coordinator pipeline (chunking + inventory upsert)
+    └── rag_retriever.py            # Implemented: search_chunks semantic retrieval service
 ```
 
 ### Pipeline Execution Flow (`prepare_evidence_for_incident`):
 1. **Load Raw Evidence**: Retrieves raw items for the given incident from `evidence_items`.
 2. **Convert & Route**: Transforms rows to input schemas, routing 4 types to preprocessors and non-preprocessed types to pass-through chunks.
-3. **Embeddings**: Generates 1536-dimensional float vector embeddings for all generated chunks.
+3. **Embeddings**: Generates 1536-dimensional normalized unit vector embeddings (`generate_embedding`).
 4. **Persist Chunks**: Bulk-writes chunks into `evidence_chunks` with `source_evidence_ids` for zero-join retrieval.
 5. **Upsert Inventory**: Computes summary counts, distinct services, and time ranges, then upserts the `evidence_inventory` record.
 
 ---
 
-## 6. RAG Retrieval Service
+## 6. RAG Retrieval Service & Embeddings
 
-Team 1 will deliver a **RAG retrieval service** that performs semantic search over `evidence_chunks` using pgvector. It accepts a natural language query with optional filters (representation types, services, time range) and returns a ranked list of the most relevant chunks with their content, metadata, similarity score, and original evidence references (`source_evidence_ids` for traceability back to `evidence_items`).
+Team 1 provides the callable **RAG retrieval service** (`app/services/rag_retriever.py`) that Team 2’s hypothesis agents import and call directly in LangGraph:
 
-How Team 2 integrates this service into the LangGraph workflow is left to Team 2's design — for example, passing retrieved chunks through the LangGraph state, calling the service inside a node, or any other pattern that fits the orchestration architecture. Team 1's responsibility is only to deliver a working, callable service.
+```python
+from app.services.rag_retriever import search_chunks
 
-The exact interface will be agreed between Team 1 and Team 2 before implementation begins.
+results = search_chunks(
+    db=db_session,
+    incident_id=incident_id,
+    query="database connection pool exhausted in order-service",
+    filters={"representation_types": ["log_cluster", "metric_anomaly"]},
+    top_k=5,
+)
+```
+
+### 6.1 Embedding Strategy (`embedding_service.py`)
+
+* **Vector Dimension**: 1536 dimensions (matching industry-standard models like OpenAI `text-embedding-3-small`).
+* **Normalized Unit Vectors**: Vectors are L2-normalized so that cosine similarity is computed directly via dot product, mapped into a clean $0.0$ to $1.0$ score range.
+* **Pluggable & Zero-Key Fallback**:
+  * In production: connects to live cloud embedding models (e.g., OpenAI or Gemini).
+  * In local/test environments: uses a deterministic SHA-256 seed-based projection that requires no API keys, incurs zero network latency, and executes in milliseconds while guaranteeing identical semantic representations across runs.
+
+### 6.2 Pre-Filtering & Semantic Ranking
+
+The service executes a 2-stage retrieval pipeline:
+1. **Relational Metadata Pre-Filtering**: Scans candidate chunks in SQL matching `incident_id`, filtering by `representation_types`, `services`, and `time_range` overlap before scoring.
+2. **Similarity Scoring & Ranking**: Computes cosine similarity between query vector and candidate chunk vectors (using pgvector `<=>` operator in PostgreSQL or unit vector cosine similarity in fallback mode), returning top-k ranked results.
 
 ---
 
-## 7. Team 1 Deliverables
+## 7. Team 1 Deliverables Status
 
-The following is what Team 1 must deliver for Team 2 to start and complete their work.
-
-| # | Deliverable | Description |
-| :--- | :--- | :--- |
-| 1 | **`evidence_inventory` table** | Populated with one row per incident after the Evidence Preparation pipeline runs. Schema as defined in Section 3.1. |
-| 2 | **`evidence_chunks` table with embeddings** | Populated with processed, embedding-indexed chunks. Schema as defined in Section 3.2. Includes `source_evidence_ids` for zero-join traceability. `representation_type` values must match Section 2. |
-| 3 | **RAG retrieval service** | A callable Python service that Team 2 nodes import and call directly inside LangGraph. Performs semantic search over `evidence_chunks` using pgvector. |
-| 4 | **Inventory data available** | The `evidence_inventory` table populated and queryable for at least one seeded incident. How Team 2 reads and passes the inventory through the Orchestrator (e.g., via LangGraph state or direct query inside a node) is Team 2's decision. |
+| # | Deliverable | Status | Description |
+| :--- | :--- | :--- | :--- |
+| 1 | **`evidence_inventory` table** | **Implemented** | Model defined in `models.py`, repository queries in `repositories.py`, populated by `evidence_prep_service.py`. |
+| 2 | **`evidence_chunks` table with embeddings** | **Implemented** | Model with pgvector support & fallback defined in `models.py`. Persisted with `source_evidence_ids` for zero-join traceability. |
+| 3 | **RAG retrieval service** | **Implemented** | `app/services/rag_retriever.py` provides `search_chunks(...)` with embedding similarity ranking, filtering, and top-k selection. |
+| 4 | **Embedding service** | **Implemented** | `app/services/embedding_service.py` provides 1536-dim vector generation and cosine similarity calculation. |
+| 5 | **Seeded scenario data** | **Pending** | Benchmark scenarios in `scripts/seed_database.py` to be seeded with chunks and inventory. |
 
 ### Minimum viable delivery to unblock Team 2
 
