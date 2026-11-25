@@ -5,7 +5,6 @@ class InvestigationState(TypedDict, total=False):
     incident_id: str
     incident: dict
     evidences: list[dict]
-    inventory: Dict[str, Any]
     chunks_count: int
     status: str
     errors: list[str]

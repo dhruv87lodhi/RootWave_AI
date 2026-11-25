@@ -2,19 +2,18 @@
 
 Extracts evidence from `evidence_items`, routes candidate items through
 type-specific preprocessors (logs, metrics, jira, slack), preserves other
-telemetry as direct pass-through chunks, generates embeddings, stores
-results in `evidence_chunks`, and updates `evidence_inventory`.
+telemetry as direct pass-through chunks, generates embeddings, and stores
+results in `evidence_chunks`.
 """
 
 from datetime import datetime, timezone
-import hashlib
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.db import repositories
-from app.db.models import EvidenceChunk, EvidenceInventory, EvidenceItem
+from app.db.models import EvidenceChunk, EvidenceItem
 from app.services.embedding_service import generate_embedding
 from app.services.preprocessors import (
     preprocess_jira,
@@ -87,7 +86,7 @@ def prepare_evidence_for_incident(
     incident_id: UUID,
     generate_embeddings: bool = True,
 ) -> Dict[str, Any]:
-    """Preprocesses all evidence items for an incident and creates chunks + inventory.
+    """Preprocesses all evidence items for an incident and creates chunks.
 
     1. Loads evidence_items from the database.
     2. Routes items by evidence_type:
@@ -98,7 +97,6 @@ def prepare_evidence_for_incident(
        - others -> direct pass-through
     3. Generates embeddings.
     4. Persists chunks to `evidence_chunks`.
-    5. Computes and upserts `evidence_inventory`.
     """
     evidence_items = repositories.list_evidence_for_incident(db, incident_id)
     if not evidence_items:
@@ -181,68 +179,10 @@ def prepare_evidence_for_incident(
         saved_chunks.append(chunk)
 
     db.flush()
-
-    # Calculate inventory summary
-    raw_summary: Dict[str, int] = {}
-    for item in evidence_items:
-        raw_summary[item.evidence_type] = raw_summary.get(item.evidence_type, 0) + 1
-
-    chunks_summary: Dict[str, Dict[str, Any]] = {}
-    services_set = set()
-
-    for ch in saved_chunks:
-        rtype = ch.representation_type
-        if rtype not in chunks_summary:
-            chunks_summary[rtype] = {"count": 0, "services": []}
-        chunks_summary[rtype]["count"] += 1
-
-        if ch.service:
-            services_set.add(ch.service)
-            if ch.service not in chunks_summary[rtype]["services"]:
-                chunks_summary[rtype]["services"].append(ch.service)
-
-    # Time range from evidence_items
-    event_times = [it.event_time for it in evidence_items if it.event_time]
-    min_time = min(event_times) if event_times else None
-    max_time = max(event_times) if event_times else None
-
-    # Upsert inventory
-    inventory = (
-        db.query(EvidenceInventory)
-        .filter(EvidenceInventory.incident_id == incident_id)
-        .first()
-    )
-    if not inventory:
-        inventory = EvidenceInventory(
-            incident_id=incident_id,
-            total_evidence_items=len(evidence_items),
-            total_chunks=len(saved_chunks),
-            services_involved=sorted(list(services_set)),
-            time_range_start=min_time,
-            time_range_end=max_time,
-            evidence_items_summary=raw_summary,
-            chunks_summary=chunks_summary,
-            generated_at=now_utc,
-        )
-        db.add(inventory)
-    else:
-        inventory.total_evidence_items = len(evidence_items)
-        inventory.total_chunks = len(saved_chunks)
-        inventory.services_involved = sorted(list(services_set))
-        inventory.time_range_start = min_time
-        inventory.time_range_end = max_time
-        inventory.evidence_items_summary = raw_summary
-        inventory.chunks_summary = chunks_summary
-        inventory.generated_at = now_utc
-
     db.commit()
 
     return {
         "incident_id": str(incident_id),
         "total_evidence_items": len(evidence_items),
         "total_chunks": len(saved_chunks),
-        "services_involved": sorted(list(services_set)),
-        "chunks_summary": chunks_summary,
-        "evidence_items_summary": raw_summary,
     }
-

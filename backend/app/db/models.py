@@ -157,52 +157,6 @@ class EvidenceItem(Base):
     )
 
 
-class EvidenceInventory(Base):
-    __tablename__ = "evidence_inventory"
-
-    inventory_id = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        server_default=text("gen_random_uuid()"),
-    )
-    incident_id = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("incidents.incident_id", ondelete="RESTRICT"),
-        nullable=False,
-        unique=True,
-    )
-    total_evidence_items = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    total_chunks = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    services_involved = mapped_column(
-        JSONB, nullable=False, server_default=text("'[]'::jsonb")
-    )
-    time_range_start = mapped_column(DateTime(timezone=True), nullable=True)
-    time_range_end = mapped_column(DateTime(timezone=True), nullable=True)
-    evidence_items_summary = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
-    chunks_summary = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
-    generated_at = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("NOW()")
-    )
-
-    __table_args__ = (
-        CheckConstraint(
-            "total_evidence_items >= 0", name="inventory_total_evidence_check"
-        ),
-        CheckConstraint(
-            "total_chunks >= 0", name="inventory_total_chunks_check"
-        ),
-        Index("idx_inventory_incident", "incident_id"),
-    )
-
 
 class EvidenceChunk(Base):
     __tablename__ = "evidence_chunks"

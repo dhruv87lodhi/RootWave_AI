@@ -109,8 +109,7 @@ def prepare_investigation(state: dict) -> dict:
             ],
         }
 
-    # Execute evidence preparation pipeline (clustering, anomalies, embeddings, chunks & inventory)
-    inventory_summary = {}
+    # Execute evidence preparation pipeline (clustering, anomalies, embeddings, chunks)
     chunks_count = 0
     try:
         with SessionLocal() as db:
@@ -120,7 +119,6 @@ def prepare_investigation(state: dict) -> dict:
                 generate_embeddings=True,
             )
             db.commit()
-            inventory_summary = prep_summary.get("inventory", {})
             chunks_count = prep_summary.get("total_chunks", 0)
     except Exception as exc:
         # If DB connection fails or table doesn't exist, we log and proceed gracefully
@@ -132,7 +130,6 @@ def prepare_investigation(state: dict) -> dict:
         "incident_id": incident_id,
         "incident": incident,
         "evidences": state.get("evidences", []),
-        "inventory": inventory_summary,
         "chunks_count": chunks_count,
         "status": "prepared",
         "errors": [],

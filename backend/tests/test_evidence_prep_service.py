@@ -101,16 +101,12 @@ def test_prepare_evidence_for_incident_mock_db():
     mock_db = MagicMock()
     # Mock repositories.list_evidence_for_incident via query
     mock_db.execute.return_value.scalars.return_value.all.return_value = [item1, item2, item3]
-    mock_db.query.return_value.filter.return_value.first.return_value = None
 
     summary = prepare_evidence_for_incident(mock_db, inc_id)
 
     assert summary["incident_id"] == str(inc_id)
     assert summary["total_evidence_items"] == 3
     assert summary["total_chunks"] == 3
-    assert "log_cluster" in summary["chunks_summary"]
-    assert "metric_anomaly" in summary["chunks_summary"]
-    assert "deployment_event" in summary["chunks_summary"]
     assert mock_db.commit.called
 
 
