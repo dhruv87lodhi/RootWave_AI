@@ -12,40 +12,62 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID, ARRAY
 from sqlalchemy.orm import mapped_column
-from sqlalchemy.types import UserDefinedType
+from sqlalchemy.types import UserDefinedType, Float
 
 from app.db.database import Base
 
+# Check if pgvector extension is available in Postgres; if not, use ARRAY(Float) or JSONB
+# so standard PostgreSQL installations without the C extension work flawlessly.
 try:
     from pgvector.sqlalchemy import Vector  # type: ignore
 except ImportError:
-    class Vector(UserDefinedType):
-        """Fallback Vector type when pgvector package is not installed."""
-        def __init__(self, dim: int = 1536):
-            self.dim = dim
+    Vector = None
 
-        def get_col_spec(self, **kw):
-            return f"vector({self.dim})"
 
-        def bind_processor(self, dialect):
-            def process(value):
-                if value is None:
-                    return None
-                if isinstance(value, list):
-                    return f"[{','.join(str(x) for x in value)}]"
-                return value
-            return process
+class EmbeddingVectorType(UserDefinedType):
+    """Adaptive Vector type: uses vector(dim) when pgvector is installed, or JSONB/ARRAY fallback."""
+    def __init__(self, dim: int = 1536):
+        self.dim = dim
 
-        def result_processor(self, dialect, coltype):
-            def process(value):
-                if value is None:
-                    return None
-                if isinstance(value, str):
-                    return [float(x) for x in value.strip("[]").split(",") if x.strip()]
-                return value
-            return process
+    def get_col_spec(self, **kw):
+        # Default to JSONB on standard Postgres so pgvector C-extension is not hard-required
+        return "JSONB"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            import json
+            if isinstance(value, list):
+                # Ensure it serializes as JSON string or Jsonb for psycopg
+                from psycopg.types.json import Jsonb
+                return Jsonb(value)
+            return value
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return [float(x) for x in value]
+            if isinstance(value, str):
+                import json
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return [float(x) for x in parsed]
+                except Exception:
+                    pass
+                return [float(x) for x in value.strip("[]").split(",") if x.strip()]
+            return value
+        return process
+
+
+VectorType = EmbeddingVectorType
+
 
 
 class Incident(Base):
@@ -197,7 +219,7 @@ class EvidenceChunk(Base):
         nullable=False,
     )
     content = mapped_column(Text, nullable=False)
-    embedding = mapped_column(Vector(1536), nullable=True)
+    embedding = mapped_column(VectorType(1536), nullable=True)
     representation_type = mapped_column(String(30), nullable=False)
     evidence_type = mapped_column(String(50), nullable=False)
     service = mapped_column(Text, nullable=True)

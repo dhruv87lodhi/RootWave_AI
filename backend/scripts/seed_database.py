@@ -20,7 +20,7 @@ PROJECT_ROOT = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.core.config import settings
 from app.db.database import Base, engine, SessionLocal
 import app.db.models  # Register models
@@ -122,6 +122,13 @@ def seed_database():
 
     # 1. Ensure tables exist
     print("\n[1/4] Ensuring PostgreSQL schema tables exist...")
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            conn.commit()
+            print("  -> PostgreSQL pgvector extension enabled.")
+        except Exception as e:
+            print(f"  -> Note on pgvector extension: {e}")
     Base.metadata.create_all(bind=engine)
     print("  -> incidents and evidence_items tables verified.")
 
@@ -187,10 +194,11 @@ def seed_database():
             # Total evidence in DB for this incident
             all_evidence = repositories.list_evidence_for_incident(session, incident.incident_id, limit=500)
 
-            # Run LangGraph workflow to produce checkpoint
+            # Run LangGraph workflow to produce checkpoint (including chunking & inventory prep)
             thread_id = f"investigation-{incident.incident_id}"
             workflow_status = "NOT_RUN"
             checkpoint_id = None
+            chunks_count = 0
 
             try:
                 graph = build_investigation_graph(checkpointer=checkpointer)
@@ -227,6 +235,7 @@ def seed_database():
                 }
                 res = graph.invoke(initial_state, config={"configurable": {"thread_id": thread_id}})
                 workflow_status = res.get("status", "UNKNOWN")
+                chunks_count = res.get("chunks_count", 0)
 
                 if checkpointer:
                     cp_tuple = checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
@@ -241,6 +250,7 @@ def seed_database():
                 "title": incident.title,
                 "severity": incident.severity,
                 "evidence_count": len(all_evidence),
+                "chunks_count": chunks_count,
                 "workflow_status": workflow_status,
                 "checkpoint_id": checkpoint_id or "N/A",
             })
@@ -250,12 +260,12 @@ def seed_database():
 
     # 4. Print summary table
     print("\n[4/4] Benchmark Seeding Summary:")
-    print("=" * 105)
-    print(f"{'Scenario':<14} | {'Severity':<8} | {'Evidences':<10} | {'Status':<8} | {'Incident ID':<36} | {'Checkpoint'}")
-    print("-" * 105)
+    print("=" * 118)
+    print(f"{'Scenario':<14} | {'Severity':<8} | {'Evidences':<10} | {'Chunks':<8} | {'Status':<8} | {'Incident ID':<36} | {'Checkpoint'}")
+    print("-" * 118)
     for r in results:
-        print(f"{r['scenario']:<14} | {r['severity']:<8} | {r['evidence_count']:<10} | {r['workflow_status']:<8} | {r['incident_id']:<36} | {str(r['checkpoint_id'])[:12]}")
-    print("=" * 105)
+        print(f"{r['scenario']:<14} | {r['severity']:<8} | {r['evidence_count']:<10} | {r['chunks_count']:<8} | {r['workflow_status']:<8} | {r['incident_id']:<36} | {str(r['checkpoint_id'])[:12]}")
+    print("=" * 118)
     print("SUCCESS: Benchmark scenarios loaded into PostgreSQL.\n")
 
 
